@@ -9,6 +9,7 @@ import yt_dlp
 import re
 import time
 import random
+import zipfile
 try:
     from PIL import Image
     from io import BytesIO
@@ -97,7 +98,7 @@ class YouTubeDownloaderApp(ctk.CTk):
         super().__init__()
 
         # Configure window
-        self.title("YouTube Downloader Pro v1.3.1")
+        self.title("YouTube Downloader Pro v1.3.2")
         self.geometry("800x800")
         self.resizable(True, True)
         self.minsize(500, 500)
@@ -140,7 +141,7 @@ class YouTubeDownloaderApp(ctk.CTk):
         
         self.title_label = ctk.CTkLabel(
             self.header_frame,
-            text="🎬 YouTube Downloader Pro v1.3.1",
+            text="🎬 YouTube Downloader Pro v1.3.2",
             font=ctk.CTkFont(size=28, weight="bold")
         )
         self.title_label.pack(side="left")
@@ -911,11 +912,91 @@ class YouTubeDownloaderApp(ctk.CTk):
             self.log_frame.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew") 
 
     def check_ffmpeg(self):
-        if not shutil.which('ffmpeg'):
-            self.log_message("[WARNING] FFmpeg not found! Audio conversion may fail.")
-            self.log_message("Please install FFmpeg and add it to your PATH.")
-        else:
-            self.log_message("[System] FFmpeg detected.")
+        # 1. Check PATH
+        if shutil.which('ffmpeg'):
+            self.log_message("[System] FFmpeg found in PATH.")
+            self.ffmpeg_path = "ffmpeg"
+            return
+
+        # 2. Check Local Bin
+        app_data = os.getenv('APPDATA')
+        if not app_data: app_data = os.path.expanduser("~")
+        self.local_bin_dir = os.path.join(app_data, "YT-Downloader", "bin")
+        local_ffmpeg = os.path.join(self.local_bin_dir, "ffmpeg.exe")
+        
+        if os.path.exists(local_ffmpeg):
+            self.log_message(f"[System] FFmpeg local override: {local_ffmpeg}")
+            self.ffmpeg_path = local_ffmpeg
+            return
+
+        # 3. Not Found
+        self.ffmpeg_path = None
+        self.log_message("[WARNING] FFmpeg not found! Audio conversion will fail.")
+        self.show_ffmpeg_warning()
+
+    def show_ffmpeg_warning(self):
+        self.ffmpeg_btn = ctk.CTkButton(
+            self.header_frame,
+            text="⚠️ Install FFmpeg",
+            fg_color="orange",
+            hover_color="darkorange",
+            text_color="black",
+            command=self.install_ffmpeg_thread,
+            width=120
+        )
+        self.ffmpeg_btn.pack(side="right", padx=10)
+        
+    def install_ffmpeg_thread(self):
+        if messagebox.askyesno("Install FFmpeg", "Download and install FFmpeg (~130MB)?\nThis is required for Audio conversion and High Quality video."):
+            threading.Thread(target=self.install_ffmpeg, daemon=True).start()
+
+    def install_ffmpeg(self):
+        self.ffmpeg_btn.configure(state="disabled", text="Downloading...")
+        try:
+            url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+            if not os.path.exists(self.local_bin_dir):
+                os.makedirs(self.local_bin_dir)
+            
+            zip_path = os.path.join(self.local_bin_dir, "ffmpeg.zip")
+            
+            # Progress reporting
+            def report_hook(count, block_size, total_size):
+                percent = int(count * block_size * 100 / total_size)
+                if percent % 10 == 0:
+                    self.ffmpeg_btn.configure(text=f"DL: {percent}%")
+            
+            self.log_message("[FFmpeg] Downloading binaries (gyan.dev)...")
+            urllib.request.urlretrieve(url, zip_path, report_hook)
+            
+            self.log_message("[FFmpeg] Download complete. Extracting...")
+            self.ffmpeg_btn.configure(text="Extracting...")
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Search for ffmpeg.exe
+                ffmpeg_src = None
+                for file in zip_ref.namelist():
+                    if file.endswith("bin/ffmpeg.exe"):
+                        ffmpeg_src = file
+                        break
+                
+                if ffmpeg_src:
+                    source = zip_ref.open(ffmpeg_src)
+                    target = open(os.path.join(self.local_bin_dir, "ffmpeg.exe"), "wb")
+                    with source, target:
+                        shutil.copyfileobj(source, target)
+                    self.log_message("[FFmpeg] Extracted ffmpeg.exe")
+                else:
+                    raise Exception("ffmpeg.exe not found in zip")
+                    
+            os.remove(zip_path)
+            self.ffmpeg_path = os.path.join(self.local_bin_dir, "ffmpeg.exe")
+            self.log_message("[FFmpeg] Installation Successful!")
+            self.ffmpeg_btn.configure(text="✅ Installed", fg_color="green")
+            self.after(3000, lambda: self.ffmpeg_btn.destroy())
+            
+        except Exception as e:
+            self.log_message(f"[FFmpeg] Error: {e}")
+            self.ffmpeg_btn.configure(text="⚠️ Retry", state="normal")
 
     def log_message(self, message):
         self.log_textbox.configure(state="normal")
@@ -1171,6 +1252,10 @@ class YouTubeDownloaderApp(ctk.CTk):
                 'concurrent_fragment_downloads': 5, # Speed boost
                 'http_chunk_size': 10485760, # 10MB chunks
             }
+            
+            # Add FFmpeg location if detected
+            if hasattr(self, 'ffmpeg_path') and self.ffmpeg_path:
+                 ydl_opts['ffmpeg_location'] = self.ffmpeg_path
             
             # Apply Playlist Selection
             if download_playlist and self.selected_playlist_items:
