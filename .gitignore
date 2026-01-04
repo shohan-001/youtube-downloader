@@ -24,8 +24,8 @@ dist/
 *.spec
 
 # Internal Documentation
-RELEASE_NOTES.md
-planning_docs/
+# RELEASE_NOTES.md
+# planning_docs/
 
 
 eggs/
